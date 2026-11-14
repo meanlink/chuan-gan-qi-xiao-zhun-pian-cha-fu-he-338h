@@ -11,7 +11,7 @@ def create(db, data):
     return r
 def deliver(db, report):
     j=db.get(Job,report.job_id)
-    if not j or not j.approved: return
+    if not j or not j.approved or j.withdrawn or j.status!='completed': return
     out=io.StringIO()
     out.write('\ufeff')
     table=j.result.get('table',{})

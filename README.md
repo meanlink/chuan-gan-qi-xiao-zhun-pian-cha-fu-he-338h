@@ -4,7 +4,7 @@ Bootstrap 区间估计的真实业务分析小型项目。完整模拟客户、�
 
 ## 模块与业务流程
 数据接入（JSON/CSV、字段验证、批次指纹）→ 参数化分析（异步 Python worker）→ 结果复核（指标、图形、明细、解释、批准）→ 定时分发（本地收件箱、CSV/JSON、SHA256）；另有业务总览和审计轨迹。
-三个贯穿全栈的实体：Dataset 数据批次、Job 分析任务、Report 分发计划；辅助 User、Audit、Delivery。
+同批样本、相同参数的复核申请合用一次共享计算，不再各自挤占队列；各申请仍保留自己的任务名称、批准与分发计划。实体：Dataset 数据批次、Run 共享计算、Job 复核申请、Report 分发计划；辅助 User、Audit、Delivery。
 
 ## 快速启动
 ```bash
@@ -22,6 +22,13 @@ docker compose exec -T backend python -m scripts.seed_demo
 |analyst@demo.local|Demo123!|接入、执行、读取与下载；不能批准或安排分发|
 |viewer@demo.local|Demo123!|只读与下载|
 
+## 共享计算与恢复
+- 合用：数据批次内容指纹 + 归一化参数决定唯一 Run。进行中的计算直接挂接共享；已完成结果直接复用；失败或已停止的计算随新申请/重试重新排队，不重复创建申请。
+- 撤销：只退出本次申请，其他申请照常拿结果；全部撤销后计算停止且不发布（运行中的执行发布时会被状态栅栏挡下）。仅等待/运行中可撤销，本人或负责人操作。
+- 恢复：执行进程心跳超时（10 秒）即被任一存活进程重新排队接管，recoveries 计数留痕；每次认领递增 epoch 栅栏令牌，多进程并发接管时旧执行即使晚完成也无法覆盖新结果（条件更新影响 0 行即丢弃，记 run.fenced 审计）。
+- 重试：`POST /jobs/{id}/retry` 沿用原申请重新排队；仅失败状态可重试。
+- 页面状态：waiting 等待共享计算 / running 运行中 / completed 已完成 / failed 计算失败 / withdrawn 已撤销；结果页展示合用申请数、计算编号与中断恢复次数，恢复完成的结果可直接查看。
+
 ## 技术与本地开发
 Python 3.12 / FastAPI / SQLAlchemy / NumPy / SciPy / scikit-learn；PostgreSQL 16；Redis 7；Nginx；原生 HTML CSS JavaScript ES modules（用户指定）。后端所有校验、持久化和算法在服务端。无前端打包步骤。
 后端：安装 backend/requirements.txt，设置 DATABASE_URL、REDIS_URL、JWT_SECRET、ARTIFACT_DIR 后在 backend/ 执行 `python -m migrations.initial`、`python -m scripts.seed_demo`、`uvicorn src.main:app`，另开 `python -m src.worker`。前端使用带 /api 反向代理的 Nginx，直接打开 index.html 不支持 API。
@@ -29,7 +36,7 @@ Python 3.12 / FastAPI / SQLAlchemy / NumPy / SciPy / scikit-learn；PostgreSQL 1
 ## 目录与工程约定
 backend/src/{models,schemas,services,routes,controllers,middlewares,constants,config,utils}；backend/scripts/seed_demo.py；backend/migrations/initial.py。
 frontend/src/{api,stores,types,components/common,hooks,pages,router,utils,constants}。
-Role 枚举：admin/analyst/viewer；JobStatus：queued/running/completed/failed。后端 backend/src/constants/enums.py，前端 frontend/src/constants/enums.js；路由权限在 middlewares/auth.py；页面按相同角色控制操作入口。
+Role 枚举：admin/analyst/viewer；JobStatus：waiting/running/completed/failed/withdrawn；RunStatus：queued/running/completed/failed/stopped。后端 backend/src/constants/enums.py，前端 frontend/src/constants/enums.js；路由权限在 middlewares/auth.py；页面按相同角色控制操作入口。
 
 ## 环境变量与 Docker
 COMPOSE_PROJECT_NAME=sensor-bootstrap；FRONTEND_PORT=18206；BACKEND_PORT=19206；DB_PORT=17706；DB_PASSWORD、JWT_SECRET 见 .env.example；SEED_DEMO 默认 true。共享命名产物卷供后端下载与 worker 写入，数据库/Redis 各持久卷。
